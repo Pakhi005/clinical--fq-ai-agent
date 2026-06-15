@@ -1,0 +1,24 @@
+# Backend dependencies for Clinical FAQ AI Agent
+# Python 3.14+ compatible (all packages have prebuilt wheels)
+
+# Web framework
+fastapi
+uvicorn
+python-dotenv
+
+# PDF support
+PyPDF2
+
+# Vector database
+faiss-cpu
+
+# LangChain ecosystem
+langchain
+langchain-community
+langchain-core
+langchain-google-genai
+langchain-huggingface
+langchain-text-splitters
+
+# Embeddings
+sentence-transformers

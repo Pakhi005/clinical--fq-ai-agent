@@ -1,0 +1,1144 @@
+# Clinical FAQ AI Agent with RAG Pipeline — Complete Build Guide
+**Build Time: 2 Days | Tech: Python, LangChain, Gemini API, FAISS, FastAPI, React.js**
+
+## 📋 PROJECT OVERVIEW
+
+**What you'll build:**
+A web app where users ask questions about clinical research. The app retrieves relevant information from a document knowledge base and answers using an LLM.
+
+**How it works:**
+1. Load clinical PDFs → chunk text → create embeddings
+2. Store embeddings in FAISS vector database
+3. User asks a question → retrieve relevant documents → send to Gemini API
+4. Gemini generates grounded answer based on context
+5. Answer displayed on React frontend with source documents
+
+**Skills demonstrated:**
+- RAG architecture ✅
+- LangChain ✅
+- Vector databases (FAISS) ✅
+- LLM integration (Gemini) ✅
+- REST API design ✅
+- Frontend integration ✅
+- Guardrails (safety) ✅
+
+---
+
+## 🎯 DAY 1 — BACKEND SETUP & RAG PIPELINE
+
+### Step 1: Prerequisites Installation
+
+**Install on your laptop:**
+```bash
+# Python 3.9+ (download from python.org)
+python --version
+
+# Git (download from git-scm.com)
+git --version
+
+# Node.js for frontend later (download from nodejs.org)
+node --version
+npm --version
+```
+
+---
+
+### Step 2: Create Project Directory
+
+```bash
+# Open terminal/cmd and run:
+mkdir clinical-faq-ai-agent
+cd clinical-faq-ai-agent
+
+# Create backend folder
+mkdir backend
+cd backend
+
+# Create Python virtual environment
+python -m venv venv
+
+# Activate it
+# On Windows:
+venv\Scripts\activate
+
+# On Mac/Linux:
+source venv/bin/activate
+
+# You should see (venv) at the start of your terminal line
+```
+
+---
+
+### Step 3: Install Python Dependencies
+
+Create a file called `requirements.txt` in the backend folder:
+
+```bash
+pip install -r requirements.txt
+```
+
+**Content of `requirements.txt`:**
+```
+fastapi==0.104.1
+uvicorn==0.24.0
+python-dotenv==1.0.0
+langchain==0.1.0
+langchain-community==0.0.10
+langchain-google-genai==0.0.8
+faiss-cpu==1.7.4
+sentence-transformers==2.2.2
+PyPDF2==3.0.1
+pydantic==2.5.0
+flask-cors==4.0.0
+```
+
+Run:
+```bash
+pip install -r requirements.txt
+```
+
+---
+
+### Step 4: Get Gemini API Key
+
+1. Go to **https://aistudio.google.com**
+2. Click "Get API Key" → "Create API Key in new Google Cloud project"
+3. Copy your API key
+4. Create `.env` file in backend folder:
+
+```
+GOOGLE_API_KEY=your_api_key_here
+```
+
+Replace `your_api_key_here` with actual key.
+
+---
+
+### Step 5: Prepare Clinical Documents
+
+You have 2 options:
+
+**Option A: Use sample PDFs (easier)**
+```bash
+# Go to: https://www.nlm.nih.gov/mesh/
+# Download 2-3 PDF files about clinical trials
+# Or use these free clinical research PDFs:
+# - https://pubmed.ncbi.nlm.nih.gov/
+# - Search "clinical trial guidelines PDF"
+```
+
+**Option B: Create a sample text file**
+Create `sample_documents.py` in backend:
+
+```python
+# sample_documents.py
+CLINICAL_DOCS = [
+    {
+        "title": "Clinical Trial Guidelines 101",
+        "content": """
+        A clinical trial is a research study performed in human subjects to evaluate 
+        the safety and efficacy of new medical interventions.
+        
+        Types of clinical trials:
+        1. Phase I: Safety and dosage (20-100 healthy volunteers)
+        2. Phase II: Efficacy and side effects (100-500 patients)
+        3. Phase III: Efficacy monitoring and comparison (300-3000 patient volunteers)
+        4. Phase IV: Post-market surveillance and safety monitoring
+        
+        Inclusion criteria: Patients must meet specific conditions to participate.
+        Exclusion criteria: Patients who should NOT participate in the study.
+        Informed Consent: All participants must understand risks and benefits.
+        """
+    },
+    {
+        "title": "Patient Safety in Clinical Research",
+        "content": """
+        Patient safety is the highest priority in clinical research.
+        
+        Safety measures include:
+        - Institutional Review Board (IRB) approval before study starts
+        - Regular monitoring by Data Safety Monitoring Board (DSMB)
+        - Participant insurance/compensation for adverse events
+        - Right to withdraw at any time without penalty
+        - Blinded studies to reduce bias
+        
+        Adverse events must be reported within 24 hours.
+        Serious adverse events may stop the trial immediately.
+        """
+    },
+    {
+        "title": "Eligibility and Screening",
+        "content": """
+        Before joining a clinical trial, participants go through screening.
+        
+        Screening includes:
+        1. Medical history review
+        2. Physical examination
+        3. Lab tests (blood, urine)
+        4. ECG (heart activity) if needed
+        5. Review of inclusion/exclusion criteria
+        
+        Screening typically takes 1-2 weeks.
+        If eligible, informed consent is obtained.
+        If not eligible, participant is informed and thanked.
+        """
+    }
+]
+```
+
+---
+
+### Step 6: Create RAG Pipeline Code
+
+Create `rag_pipeline.py` in backend:
+
+```python
+# rag_pipeline.py
+import os
+from dotenv import load_dotenv
+from langchain.embeddings import HuggingFaceEmbeddings
+from langchain.vectorstores import FAISS
+from langchain.document_loaders import PyPDFLoader
+from langchain.text_splitter import CharacterTextSplitter
+from PyPDF2 import PdfReader
+import json
+
+load_dotenv()
+
+class RAGPipeline:
+    def __init__(self, index_path="faiss_index"):
+        self.index_path = index_path
+        self.embeddings = HuggingFaceEmbeddings(
+            model_name="sentence-transformers/all-MiniLM-L6-v2"
+        )
+        self.vectorstore = None
+        self.documents = []
+        
+    def load_documents_from_text(self, documents_list):
+        """Load documents from list of dicts (title + content)"""
+        from langchain.schema import Document
+        
+        loaded_docs = []
+        for doc in documents_list:
+            doc_obj = Document(
+                page_content=doc["content"],
+                metadata={"source": doc["title"]}
+            )
+            loaded_docs.append(doc_obj)
+        
+        self.documents = loaded_docs
+        print(f"✅ Loaded {len(loaded_docs)} documents")
+        return loaded_docs
+    
+    def load_documents_from_pdf(self, pdf_folder):
+        """Load documents from PDF files"""
+        from langchain.schema import Document
+        
+        docs = []
+        for filename in os.listdir(pdf_folder):
+            if filename.endswith(".pdf"):
+                pdf_path = os.path.join(pdf_folder, filename)
+                print(f"Loading {filename}...")
+                
+                reader = PdfReader(pdf_path)
+                for page_num, page in enumerate(reader.pages):
+                    text = page.extract_text()
+                    doc = Document(
+                        page_content=text,
+                        metadata={"source": f"{filename} (page {page_num+1})"}
+                    )
+                    docs.append(doc)
+        
+        self.documents = docs
+        print(f"✅ Loaded {len(docs)} pages from PDFs")
+        return docs
+    
+    def chunk_documents(self, chunk_size=500, chunk_overlap=100):
+        """Split documents into chunks"""
+        splitter = CharacterTextSplitter(
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap
+        )
+        
+        chunks = splitter.split_documents(self.documents)
+        print(f"✅ Split into {len(chunks)} chunks")
+        return chunks
+    
+    def create_vector_store(self):
+        """Create FAISS vector store"""
+        if not self.documents:
+            raise ValueError("No documents loaded. Load documents first.")
+        
+        chunks = self.chunk_documents()
+        
+        # Create FAISS index
+        self.vectorstore = FAISS.from_documents(
+            chunks, 
+            self.embeddings
+        )
+        
+        # Save to disk
+        self.vectorstore.save_local(self.index_path)
+        print(f"✅ Vector store created and saved to {self.index_path}")
+        
+        return self.vectorstore
+    
+    def load_vector_store(self):
+        """Load existing FAISS index"""
+        if os.path.exists(self.index_path):
+            self.vectorstore = FAISS.load_local(
+                self.index_path, 
+                self.embeddings
+            )
+            print(f"✅ Vector store loaded from {self.index_path}")
+            return self.vectorstore
+        else:
+            raise FileNotFoundError(f"Vector store not found at {self.index_path}")
+    
+    def retrieve_context(self, query, k=3):
+        """Retrieve top k relevant documents for a query"""
+        if self.vectorstore is None:
+            self.load_vector_store()
+        
+        results = self.vectorstore.similarity_search_with_scores(query, k=k)
+        
+        documents = []
+        for doc, score in results:
+            documents.append({
+                "content": doc.page_content,
+                "source": doc.metadata.get("source", "Unknown"),
+                "score": float(score)
+            })
+        
+        return documents
+
+
+# Initialize pipeline
+rag = RAGPipeline()
+
+if __name__ == "__main__":
+    # Test: Load and create vector store
+    from sample_documents import CLINICAL_DOCS
+    
+    rag.load_documents_from_text(CLINICAL_DOCS)
+    rag.create_vector_store()
+    
+    # Test retrieval
+    query = "What are the types of clinical trials?"
+    results = rag.retrieve_context(query)
+    for i, doc in enumerate(results, 1):
+        print(f"\n{i}. Source: {doc['source']} (similarity: {doc['score']:.2f})")
+        print(f"   Content: {doc['content'][:200]}...")
+```
+
+Run to test:
+```bash
+python rag_pipeline.py
+```
+
+You should see vector store created ✅
+
+---
+
+### Step 7: Create LLM Integration Code
+
+Create `llm_service.py` in backend:
+
+```python
+# llm_service.py
+import os
+from dotenv import load_dotenv
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain.prompts import PromptTemplate
+from rag_pipeline import rag
+
+load_dotenv()
+
+class LLMService:
+    def __init__(self):
+        self.llm = ChatGoogleGenerativeAI(
+            model="gemini-pro",
+            google_api_key=os.getenv("GOOGLE_API_KEY"),
+            temperature=0.3
+        )
+        
+        self.prompt_template = PromptTemplate(
+            input_variables=["context", "question"],
+            template="""You are a helpful assistant for clinical research questions.
+            
+Use the following context to answer the user's question. If the answer is not in the context, 
+say "I don't have enough information to answer that question." Do NOT make up information.
+
+Context:
+{context}
+
+Question: {question}
+
+Answer:"""
+        )
+    
+    def generate_answer(self, question: str, context_documents: list) -> dict:
+        """Generate answer based on retrieved documents"""
+        
+        # Combine context
+        context_text = "\n\n".join([
+            f"[{doc['source']}]\n{doc['content']}"
+            for doc in context_documents
+        ])
+        
+        # Create prompt
+        prompt = self.prompt_template.format(
+            context=context_text,
+            question=question
+        )
+        
+        # Get answer from Gemini
+        response = self.llm.invoke(prompt)
+        answer = response.content
+        
+        # Add guardrail check
+        if self.is_safe_answer(answer, question):
+            return {
+                "answer": answer,
+                "sources": [doc["source"] for doc in context_documents],
+                "safe": True
+            }
+        else:
+            return {
+                "answer": "I cannot provide a reliable answer to this question.",
+                "sources": [],
+                "safe": False
+            }
+    
+    def is_safe_answer(self, answer: str, question: str) -> bool:
+        """Check if answer is safe and relevant"""
+        
+        # If it says "don't know", it's safe
+        if "don't have" in answer.lower() or "insufficient" in answer.lower():
+            return True
+        
+        # If answer is reasonable length, it's likely good
+        if 50 < len(answer) < 2000:
+            return True
+        
+        return False
+
+
+# Initialize service
+llm_service = LLMService()
+
+if __name__ == "__main__":
+    # Test
+    question = "What is a Phase II clinical trial?"
+    context = rag.retrieve_context(question)
+    
+    result = llm_service.generate_answer(question, context)
+    print(f"\nQuestion: {question}")
+    print(f"Answer: {result['answer']}")
+    print(f"Sources: {result['sources']}")
+```
+
+Test:
+```bash
+python llm_service.py
+```
+
+---
+
+### Step 8: Create FastAPI Backend
+
+Create `main.py` in backend:
+
+```python
+# main.py
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from rag_pipeline import rag
+from llm_service import llm_service
+from dotenv import load_dotenv
+
+load_dotenv()
+
+app = FastAPI(title="Clinical FAQ AI Agent")
+
+# Enable CORS for React frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Initialize RAG on startup
+@app.on_event("startup")
+async def startup_event():
+    print("Loading RAG pipeline...")
+    try:
+        rag.load_vector_store()
+        print("✅ RAG pipeline loaded")
+    except FileNotFoundError:
+        print("⚠️ Vector store not found. Creating new one...")
+        from sample_documents import CLINICAL_DOCS
+        rag.load_documents_from_text(CLINICAL_DOCS)
+        rag.create_vector_store()
+        print("✅ Vector store created")
+
+# Request model
+class ChatRequest(BaseModel):
+    question: str
+
+class ChatResponse(BaseModel):
+    answer: str
+    sources: list
+    safe: bool
+
+# API endpoint
+@app.post("/chat", response_model=ChatResponse)
+async def chat(request: ChatRequest):
+    """Chat endpoint for clinical FAQ"""
+    
+    question = request.question
+    
+    # Retrieve relevant documents
+    context = rag.retrieve_context(question, k=3)
+    
+    # Generate answer using LLM
+    result = llm_service.generate_answer(question, context)
+    
+    return ChatResponse(
+        answer=result["answer"],
+        sources=result["sources"],
+        safe=result["safe"]
+    )
+
+@app.get("/health")
+async def health():
+    """Health check"""
+    return {"status": "ok"}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+```
+
+**Test the backend:**
+```bash
+python main.py
+```
+
+You should see:
+```
+Loading RAG pipeline...
+✅ Vector store created
+Uvicorn running on http://127.0.0.1:8000
+```
+
+Test the API in browser or Postman:
+```
+http://localhost:8000/health
+```
+
+Should return: `{"status": "ok"}`
+
+---
+
+## 🎯 DAY 2 — FRONTEND & DEPLOYMENT
+
+### Step 9: Create React Frontend
+
+Go back to project root (not backend folder):
+
+```bash
+cd ..
+npx create-react-app frontend
+cd frontend
+npm install axios
+```
+
+Replace `src/App.js`:
+
+```javascript
+// src/App.js
+import React, { useState, useRef, useEffect } from 'react';
+import axios from 'axios';
+import './App.css';
+
+function App() {
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState('');
+  const [loading, setLoading] = useState(false);
+  const messagesEndRef = useRef(null);
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
+
+  const handleSend = async (e) => {
+    e.preventDefault();
+    
+    if (!input.trim()) return;
+
+    // Add user message
+    const userMessage = { role: 'user', content: input };
+    setMessages([...messages, userMessage]);
+    setInput('');
+    setLoading(true);
+
+    try {
+      const response = await axios.post(
+        'http://localhost:8000/chat',
+        { question: input }
+      );
+
+      const assistantMessage = {
+        role: 'assistant',
+        content: response.data.answer,
+        sources: response.data.sources
+      };
+
+      setMessages(prev => [...prev, assistantMessage]);
+    } catch (error) {
+      const errorMessage = {
+        role: 'assistant',
+        content: 'Sorry, there was an error processing your question.'
+      };
+      setMessages(prev => [...prev, errorMessage]);
+      console.error('Error:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="App">
+      <div className="container">
+        <div className="header">
+          <h1>Clinical Research FAQ Assistant</h1>
+          <p>Ask questions about clinical trials and research</p>
+        </div>
+
+        <div className="chat-box">
+          {messages.length === 0 ? (
+            <div className="welcome">
+              <h2>Welcome to Clinical FAQ AI Agent</h2>
+              <p>Ask me anything about clinical trials, eligibility, safety, and more.</p>
+              <div className="examples">
+                <p>Try asking:</p>
+                <ul>
+                  <li>"What are the types of clinical trials?"</li>
+                  <li>"What is informed consent?"</li>
+                  <li>"What happens during screening?"</li>
+                </ul>
+              </div>
+            </div>
+          ) : (
+            messages.map((msg, idx) => (
+              <div key={idx} className={`message ${msg.role}`}>
+                <div className="message-content">{msg.content}</div>
+                {msg.sources && msg.sources.length > 0 && (
+                  <div className="sources">
+                    <strong>Sources:</strong>
+                    <ul>
+                      {msg.sources.map((source, i) => (
+                        <li key={i}>{source}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            ))
+          )}
+          {loading && (
+            <div className="message assistant">
+              <div className="loading">
+                <span></span><span></span><span></span>
+              </div>
+            </div>
+          )}
+          <div ref={messagesEndRef} />
+        </div>
+
+        <form className="input-form" onSubmit={handleSend}>
+          <input
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="Ask a clinical research question..."
+            disabled={loading}
+          />
+          <button type="submit" disabled={loading}>
+            {loading ? 'Sending...' : 'Send'}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+export default App;
+```
+
+Create `src/App.css`:
+
+```css
+/* src/App.css */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  min-height: 100vh;
+}
+
+.App {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+  padding: 20px;
+}
+
+.container {
+  width: 100%;
+  max-width: 700px;
+  height: 90vh;
+  background: white;
+  border-radius: 12px;
+  box-shadow: 0 10px 50px rgba(0, 0, 0, 0.3);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.header {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  padding: 20px;
+  text-align: center;
+}
+
+.header h1 {
+  font-size: 24px;
+  margin-bottom: 5px;
+}
+
+.header p {
+  font-size: 14px;
+  opacity: 0.9;
+}
+
+.chat-box {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+  background: #f7f7f7;
+}
+
+.welcome {
+  text-align: center;
+  padding: 40px 20px;
+  color: #555;
+}
+
+.welcome h2 {
+  margin-bottom: 10px;
+  color: #667eea;
+}
+
+.examples {
+  background: white;
+  border-radius: 8px;
+  padding: 20px;
+  margin-top: 20px;
+  text-align: left;
+}
+
+.examples ul {
+  margin-left: 20px;
+  margin-top: 10px;
+}
+
+.examples li {
+  margin: 8px 0;
+  color: #555;
+}
+
+.message {
+  margin: 15px 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.message.user {
+  align-items: flex-end;
+}
+
+.message.assistant {
+  align-items: flex-start;
+}
+
+.message-content {
+  max-width: 80%;
+  padding: 12px 16px;
+  border-radius: 12px;
+  line-height: 1.5;
+  word-wrap: break-word;
+}
+
+.message.user .message-content {
+  background: #667eea;
+  color: white;
+  border-bottom-right-radius: 4px;
+}
+
+.message.assistant .message-content {
+  background: white;
+  color: #333;
+  border: 1px solid #ddd;
+  border-bottom-left-radius: 4px;
+}
+
+.sources {
+  font-size: 12px;
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: #f0f0f0;
+  border-radius: 8px;
+  max-width: 80%;
+}
+
+.sources strong {
+  display: block;
+  margin-bottom: 5px;
+  color: #667eea;
+}
+
+.sources ul {
+  margin-left: 20px;
+  color: #666;
+}
+
+.sources li {
+  margin: 3px 0;
+  font-size: 11px;
+}
+
+.loading {
+  display: flex;
+  gap: 5px;
+  padding: 10px;
+}
+
+.loading span {
+  width: 8px;
+  height: 8px;
+  background: #667eea;
+  border-radius: 50%;
+  animation: bounce 1.4s infinite;
+}
+
+.loading span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.loading span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes bounce {
+  0%, 80%, 100% {
+    opacity: 0.3;
+  }
+  40% {
+    opacity: 1;
+  }
+}
+
+.input-form {
+  display: flex;
+  gap: 10px;
+  padding: 15px 20px;
+  background: white;
+  border-top: 1px solid #eee;
+}
+
+.input-form input {
+  flex: 1;
+  padding: 12px 16px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.input-form input:focus {
+  border-color: #667eea;
+}
+
+.input-form input:disabled {
+  background: #f5f5f5;
+  cursor: not-allowed;
+}
+
+.input-form button {
+  padding: 12px 24px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.2s;
+}
+
+.input-form button:hover:not(:disabled) {
+  transform: translateY(-2px);
+}
+
+.input-form button:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+@media (max-width: 600px) {
+  .container {
+    height: 100vh;
+    border-radius: 0;
+  }
+  
+  .message-content {
+    max-width: 95%;
+  }
+  
+  .sources {
+    max-width: 95%;
+  }
+}
+```
+
+Test frontend:
+```bash
+npm start
+```
+
+Should open http://localhost:3000
+
+---
+
+### Step 10: Connect Frontend to Backend
+
+Update `src/App.js` to change API URL for production:
+
+The frontend is now looking for backend at `http://localhost:8000` which works locally.
+
+---
+
+### Step 11: Deploy Backend to Render (Free)
+
+1. **Push to GitHub:**
+```bash
+cd backend
+git init
+git add .
+git commit -m "Clinical FAQ AI Agent backend"
+git remote add origin https://github.com/YOUR_USERNAME/clinical-faq-ai-agent.git
+git push -u origin main
+```
+
+2. **Create `render.yaml` in backend folder:**
+```yaml
+services:
+  - type: web
+    name: clinical-faq-backend
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: GOOGLE_API_KEY
+        sync: false
+```
+
+3. **Deploy on Render:**
+   - Go to https://render.com
+   - Sign up with GitHub
+   - Click "New +" → "Web Service"
+   - Connect your GitHub repo
+   - Select Python
+   - Deploy
+
+Get your backend URL (e.g., `https://clinical-faq-backend.onrender.com`)
+
+---
+
+### Step 12: Deploy Frontend to Vercel (Free)
+
+1. **Update `src/App.js` API URL:**
+
+In the `handleSend` function, change:
+```javascript
+'http://localhost:8000/chat'
+```
+
+To:
+```javascript
+'https://clinical-faq-backend.onrender.com/chat'
+```
+
+2. **Deploy:**
+```bash
+cd frontend
+npm install -g vercel
+vercel login
+vercel
+```
+
+Follow prompts. Your frontend is now live!
+
+---
+
+## 📝 GITHUB SETUP
+
+Create `README.md` in backend folder:
+
+```markdown
+# Clinical FAQ AI Agent - Backend
+
+An AI-powered system that answers clinical research questions using RAG (Retrieval-Augmented Generation).
+
+## Features
+- RAG pipeline with FAISS vector database
+- LLM integration with Gemini API
+- Guardrail layer for safe responses
+- FastAPI REST API
+- CORS enabled for React frontend
+
+## Tech Stack
+- **Framework**: FastAPI
+- **LLM**: Google Gemini API
+- **Embeddings**: Sentence Transformers
+- **Vector DB**: FAISS
+- **Orchestration**: LangChain
+
+## Setup
+
+### Prerequisites
+- Python 3.9+
+- Gemini API Key
+
+### Installation
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+### Environment Variables
+Create `.env`:
+```
+GOOGLE_API_KEY=your_api_key_here
+```
+
+### Run Locally
+```bash
+python main.py
+```
+
+Backend runs on http://localhost:8000
+
+### API Endpoint
+- **POST** `/chat` - Chat with the AI agent
+  - Request: `{"question": "What is a clinical trial?"}`
+  - Response: `{"answer": "...", "sources": [...], "safe": true}`
+
+## Project Structure
+```
+backend/
+├── main.py              # FastAPI app
+├── rag_pipeline.py      # RAG implementation
+├── llm_service.py       # LLM integration
+├── sample_documents.py  # Sample clinical docs
+├── requirements.txt     # Dependencies
+└── faiss_index/         # Vector store
+```
+
+## How It Works
+1. **Ingestion**: Load clinical documents → chunk text
+2. **Embedding**: Generate embeddings using Sentence Transformers
+3. **Retrieval**: User query → retrieve top 3 relevant documents from FAISS
+4. **Generation**: Send context + query to Gemini API → get answer
+5. **Safety**: Check response for hallucinations → return safe answer
+
+## Testing
+```bash
+# Test RAG pipeline
+python rag_pipeline.py
+
+# Test LLM service
+python llm_service.py
+
+# Test full API
+curl -X POST http://localhost:8000/chat \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What is a Phase II trial?"}'
+```
+
+## Deployment
+Deployed on Render: https://clinical-faq-backend.onrender.com
+
+## Future Improvements
+- [ ] Add PDF upload functionality
+- [ ] Add conversation history
+- [ ] Implement multi-turn conversations
+- [ ] Add more guardrails (medical misinformation detection)
+- [ ] Add analytics dashboard
+
+## Author
+Pakhi Kumari
+```
+
+---
+
+## 🚀 FINAL CHECKLIST
+
+- ✅ Backend running locally on port 8000
+- ✅ Frontend running locally on port 3000
+- ✅ Both connected (test with a question)
+- ✅ GitHub repo created with README
+- ✅ Backend deployed on Render
+- ✅ Frontend deployed on Vercel
+- ✅ Add project links to resume
+- ✅ Add GitHub link to LinkedIn
+
+---
+
+## 📊 WHAT TO TELL IN INTERVIEWS
+
+**"What does this project demonstrate?"**
+> I built an end-to-end RAG system that answers clinical research questions. It loads PDF documents, creates embeddings, stores them in a FAISS vector database, retrieves relevant documents for a user query, and uses Gemini API to generate grounded answers. I added guardrails to prevent hallucinations.
+
+**"Why RAG instead of just LLM?"**
+> RAG ensures answers are grounded in actual documents and reduces hallucinations. For clinical information, accuracy is critical — users need sourced, reliable information.
+
+**"How do you prevent bad answers?"**
+> I implemented a safety check that verifies answers are within expected parameters. If the LLM can't find relevant information, it says "I don't know" instead of making something up.
+
+**"How would you improve this?"**
+> Add PDF upload, multi-turn conversations, better guardrails for medical misinformation, user feedback loop to improve retrieval quality.
+
+---
+
+**Good luck building! You've got this. 🎯**
