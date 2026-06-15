@@ -1,7 +1,7 @@
 # rag_pipeline.py - LangChain 0.3 compatible
 import os
 from dotenv import load_dotenv
-from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
@@ -13,9 +13,7 @@ class RAGPipeline:
     def __init__(self, index_path="faiss_index"):
         self.index_path = index_path
         print("Loading embedding model (first run may take a minute)...")
-        self.embeddings = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2"
-        )
+        self.embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
         print("Embedding model ready")
         self.vectorstore = None
         self.documents = []
