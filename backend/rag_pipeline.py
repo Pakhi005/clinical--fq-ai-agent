@@ -13,7 +13,7 @@ class RAGPipeline:
     def __init__(self, index_path="faiss_index"):
         self.index_path = index_path
         print("Loading embedding model (first run may take a minute)...")
-        self.embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
+        self.embeddings = GoogleGenerativeAIEmbeddings(model="models/text-embedding-004")
         print("Embedding model ready")
         self.vectorstore = None
         self.documents = []
