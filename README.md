@@ -1,7 +1,4 @@
 # Clinical FAQ AI Agent 🧬
-
-LINK : https://ethical-ai-loan-predictor.streamlit.app/
-
 An **end-to-end RAG system** that answers clinical research questions using **LangChain + FAISS + Google Gemini + React**.
 
 ## 🏗️ Architecture
